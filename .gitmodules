@@ -1,0 +1,3 @@
+[submodule "bank-api"]
+	path = bank-api
+	url = https://github.com/NegaNote/bank-api.git

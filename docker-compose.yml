@@ -1,0 +1,38 @@
+services:
+  banking-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: bankdb
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "3307:3306"          # host:container — 3307 so it doesn't conflict with a local MySQL on 3306
+    volumes:
+      - banking-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  banking-service:
+    build: ./bank-api
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://banking-db:3306/bankdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate     # Flyway owns the schema; JPA just validates
+    depends_on:
+      banking-db:
+        condition: service_healthy
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8090:8080"
+
+volumes:
+  banking-db-data:
