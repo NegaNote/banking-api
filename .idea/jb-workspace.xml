@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="WorkspaceSettings">
-    <project name="bank-api" path="$PROJECT_DIR$/bank-api">
-      <vcs id="Git" remoteUrl="https://github.com/NegaNote/bank-api.git" />
-    </project>
-    <option name="workspace" value="true" />
-  </component>
-</project>
