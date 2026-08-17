@@ -1,3 +1,6 @@
 [submodule "bank-api"]
 	path = banking-service
 	url = https://github.com/NegaNote/bank-api.git
+[submodule "auth-service"]
+	path = auth-service
+	url = https://github.com/NegaNote/auth-service.git
