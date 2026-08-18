@@ -1,4 +1,19 @@
 services:
+  auth-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: authdb
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - auth-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   banking-db:
     image: mysql:8.0
     environment:
@@ -6,8 +21,6 @@ services:
       MYSQL_DATABASE: bankdb
       MYSQL_USER: ${DB_USERNAME}
       MYSQL_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - "3307:3306"          # host:container — 3307 so it doesn't conflict with a local MySQL on 3306
     volumes:
       - banking-db-data:/var/lib/mysql
     healthcheck:
@@ -16,17 +29,37 @@ services:
       timeout: 5s
       retries: 10
 
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://auth-db:3306/authdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   banking-service:
-    build: ./bank-api
+    build: ./banking-service
     ports:
       - "8080:8080"
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://banking-db:3306/bankdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
       SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
-      SPRING_JPA_HIBERNATE_DDL_AUTO: validate     # Flyway owns the schema; JPA just validates
+      APP_AUTH_JWKS_URI: http://auth-service:8081/.well-known/jwks.json
     depends_on:
       banking-db:
+        condition: service_healthy
+      auth-service:
         condition: service_healthy
 
   adminer:
@@ -35,4 +68,5 @@ services:
       - "8090:8080"
 
 volumes:
+  auth-db-data:
   banking-db-data:
