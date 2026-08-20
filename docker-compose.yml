@@ -37,6 +37,16 @@ services:
       SPRING_DATASOURCE_URL: jdbc:mysql://auth-db:3306/authdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
       SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_PROFILES_ACTIVE: docker
+      JAVA_TOOL_OPTIONS: "-javaagent:/opt/otel/opentelemetry-javaagent.jar"
+      OTEL_SERVICE_NAME: auth-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none               # we'll do metrics via Prometheus separately
+      OTEL_LOGS_EXPORTER: none                  # we already have JSON logs
+      OTEL_TRACES_SAMPLER: parentbased_always_on
+      OTEL_INSTRUMENTATION_LOGBACK_APPENDER_ENABLED: "true"
     depends_on:
       auth-db:
         condition: service_healthy
@@ -55,7 +65,17 @@ services:
       SPRING_DATASOURCE_URL: jdbc:mysql://banking-db:3306/bankdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
       SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_PROFILES_ACTIVE: docker
       APP_AUTH_JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+      JAVA_TOOL_OPTIONS: "-javaagent:/opt/otel/opentelemetry-javaagent.jar"
+      OTEL_SERVICE_NAME: banking-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none               # we'll do metrics via Prometheus separately
+      OTEL_LOGS_EXPORTER: none                  # we already have JSON logs
+      OTEL_TRACES_SAMPLER: parentbased_always_on
+      OTEL_INSTRUMENTATION_LOGBACK_APPENDER_ENABLED: "true"
     depends_on:
       banking-db:
         condition: service_healthy
@@ -72,6 +92,14 @@ services:
     image: adminer:latest
     ports:
       - "8090:8080"
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
 
 volumes:
   auth-db-data:
