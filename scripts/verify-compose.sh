@@ -102,7 +102,7 @@ compose() {
 check_layout() {
     local service
     local migration_count
-    local -a expected_services=(auth-db banking-db auth-service banking-service adminer)
+    local -a expected_services=(auth-db banking-db auth-service banking-service adminer jaeger)
     local -a configured_services
     local configured_service_output
     local submodule_status
