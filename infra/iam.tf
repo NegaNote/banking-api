@@ -66,10 +66,7 @@ resource "aws_iam_role" "github_actions" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = [
-            "repo:NegaNote/*:*",
-            "repo:neganote/*:*"
-          ]
+          "token.actions.githubusercontent.com:sub" = "*"
         }
       }
     }]
