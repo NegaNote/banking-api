@@ -1,0 +1,57 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 123456789012.dkr.ecr.us-east-1.amazonaws.com    # use yours
+
+permissions:
+  id-token: write    # required for OIDC
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: auth-service
+            ecs_service: auth-service
+          - name: banking-service
+            ecs_service: banking-service
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::401429382691:role/jdbank-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        working-directory: ./${{ matrix.service.name }}
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build --platform linux/amd64 \
+            -t $ECR_REGISTRY/jdbank/${{ matrix.service.name }}:$IMAGE_TAG \
+            -t $ECR_REGISTRY/jdbank/${{ matrix.service.name }}:latest \
+            .
+          docker push $ECR_REGISTRY/jdbank/${{ matrix.service.name }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/jdbank/${{ matrix.service.name }}:latest
+
+      - name: Force ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster jdbank-cluster \
+            --service ${{ matrix.service.ecs_service }} \
+            --force-new-deployment
