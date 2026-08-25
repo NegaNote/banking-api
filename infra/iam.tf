@@ -51,7 +51,7 @@ output "ecs_task_role_arn"           { value = aws_iam_role.ecs_task.arn }
 resource "aws_iam_openid_connect_provider" "github" {
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["227203b5317f3818cab5b5ce596132bf36748c0e"]
+  thumbprint_list = ["6f285252616f7311c4125b27814b600dbe130282", "1c58a3a8518e8759bf075b76b750d4f2df264fcd"]
 }
 
 # Role that GitHub Actions assumes
@@ -66,7 +66,7 @@ resource "aws_iam_role" "github_actions" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:neganote/banking-api:*"
+          "token.actions.githubusercontent.com:sub" = "repo:NegaNote/banking-api:*"
         }
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
