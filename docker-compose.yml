@@ -29,6 +29,21 @@ services:
       timeout: 5s
       retries: 10
 
+  notification-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: notificationdb
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - notification-db-data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   auth-service:
     build: ./auth-service
     ports:
@@ -88,6 +103,30 @@ services:
       retries: 10
       start_period: 30s
 
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://notification-db:3306/notificationdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_PROFILES_ACTIVE: docker
+      APP_AUTH_JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+    depends_on:
+      notification-db:
+        condition: service_healthy
+      banking-service:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8082/actuator/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   adminer:
     image: adminer:latest
     ports:
@@ -140,3 +179,4 @@ services:
 volumes:
   auth-db-data:
   banking-db-data:
+  notification-db-data:
