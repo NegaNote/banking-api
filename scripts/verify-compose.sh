@@ -8,6 +8,7 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 AUTH_URL="${AUTH_URL:-http://localhost:8081}"
 BANKING_URL="${BANKING_URL:-http://localhost:8080}"
 ADMINER_URL="${ADMINER_URL:-http://localhost:8090}"
+NOTIFICATION_URL="${NOTIFICATION_URL:-http://localhost:8082}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 FRESH_START=0
 NO_SUDO=0
@@ -53,7 +54,12 @@ done
 if ((NO_SUDO)); then
     DOCKER=(docker)
 else
-    DOCKER=(sudo docker)
+    # Check if docker needs sudo by trying without first
+    if docker compose version >/dev/null 2>&1; then
+        DOCKER=(docker)
+    else
+        DOCKER=(sudo docker)
+    fi
 fi
 
 HTTP_BODY=
@@ -171,11 +177,12 @@ wait_for_stack() {
     local adminer_status
     local auth_status
     local banking_status
+    local notification_status
     local ready
 
     while ((SECONDS < deadline)); do
         ready=1
-        for service in auth-db banking-db auth-service banking-service; do
+        for service in auth-db banking-db notification-db auth-service banking-service kafka; do
             row="$(service_status_line "$service")"
             if [[ -z "$row" ]]; then
                 ready=0
@@ -202,14 +209,13 @@ wait_for_stack() {
         auth_status="$(http_status "$AUTH_URL/actuator/health")"
         banking_status="$(http_status "$BANKING_URL/actuator/health")"
         adminer_status="$(http_status "$ADMINER_URL/")"
-        if [[ "$auth_status" != 200 || "$banking_status" != 200 ||
-            "$adminer_status" != 200 ]]; then
+        if [[ "$auth_status" != 200 || "$banking_status" != 200 || "$adminer_status" != 200 ]]; then
             ready=0
         fi
 
         if ((ready)); then
             pass 'All required containers are running and healthy'
-            pass 'Auth service, banking service, and Adminer respond over HTTP'
+            pass 'Auth, banking, and Adminer respond over HTTP'
             return
         fi
         sleep 5
@@ -217,6 +223,72 @@ wait_for_stack() {
 
     compose ps --all >&2 || true
     fail "Stack did not become healthy within ${HEALTH_TIMEOUT}s"
+}
+
+wait_for_kafka_broker() {
+    local deadline=$((SECONDS + HEALTH_TIMEOUT))
+    local output
+
+    while ((SECONDS < deadline)); do
+        output="$(compose exec -T kafka sh -ec '
+            /opt/kafka/bin/kafka-broker-api-versions.sh \
+                --bootstrap-server localhost:9092 2>&1 || echo "FAILED"
+        ' 2>&1)"
+
+        if [[ "$output" != *"FAILED"* ]] && [[ "$output" != *"ERROR"* ]]; then
+            pass 'Kafka broker is initialized and accepting connections'
+            return
+        fi
+
+        sleep 2
+    done
+
+    fail "Kafka broker did not initialize within ${HEALTH_TIMEOUT}s"
+}
+
+wait_for_kafka_topic() {
+    local deadline=$((SECONDS + HEALTH_TIMEOUT))
+    local topic_name='banking.money-movements'
+    local output
+
+    while ((SECONDS < deadline)); do
+        output="$(compose exec -T kafka sh -ec '
+            /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server localhost:9092 \
+                --list 2>&1 | grep -F "banking.money-movements" || echo "NOT_FOUND"
+        ' 2>&1)"
+
+        if [[ "$output" == *"banking.money-movements"* ]]; then
+            pass "Kafka topic '$topic_name' is ready"
+            return
+        fi
+
+        sleep 2
+    done
+
+    fail "Kafka topic '$topic_name' was not created within ${HEALTH_TIMEOUT}s"
+}
+
+wait_for_kafka_group_coordination() {
+    local deadline=$((SECONDS + HEALTH_TIMEOUT))
+    local output
+
+    while ((SECONDS < deadline)); do
+        output="$(compose exec -T kafka sh -ec '
+            /opt/kafka/bin/kafka-consumer-groups.sh \
+                --bootstrap-server localhost:9092 \
+                --list 2>&1 || echo "FAILED"
+        ' 2>&1)"
+
+        if [[ "$output" != *"FAILED"* ]] && [[ "$output" != *"error"* ]]; then
+            pass 'Kafka group coordinator is ready'
+            return
+        fi
+
+        sleep 2
+    done
+
+    fail "Kafka group coordinator did not initialize within ${HEALTH_TIMEOUT}s"
 }
 
 request() {
@@ -348,10 +420,130 @@ tamper_token() {
 db_query() {
     local service="$1"
     local sql="$2"
+    local database
+
+    case "$service" in
+        auth-db)
+            database="authdb"
+            ;;
+        banking-db)
+            database="bankdb"
+            ;;
+        notification-db)
+            database="notificationdb"
+            ;;
+        *)
+            printf '[FAIL] Unknown database service: %s\n' "$service" >&2
+            return 1
+            ;;
+    esac
 
     compose exec -T "$service" sh -c \
-        'mysql --protocol=socket -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B -e "$1"' \
-        sh "$sql"
+        'mysql --protocol=socket -uroot -p"$MYSQL_ROOT_PASSWORD" -D "$1" -N -B -e "$2"' \
+        sh "$database" "$sql"
+}
+
+kafka_topic_messages() {
+    compose exec -T kafka sh -ec '
+        /opt/kafka/bin/kafka-console-consumer.sh \
+            --bootstrap-server localhost:9092 \
+            --topic banking.money-movements \
+            --from-beginning \
+            --timeout-ms 15000 \
+            --property value.deserializer.use.type.headers=false \
+            --property print.key=true \
+            --property key.separator="|" \
+            --property print.value=true \
+            --property print.headers=false \
+            --property print.partition=false \
+            --property print.offset=false \
+            --property value.deserializer=org.apache.kafka.common.serialization.StringDeserializer || true
+    '
+}
+
+kafka_message_matches() {
+    local message="$1"
+    local event_type="$2"
+    local user_id="$3"
+    local account_number="$4"
+    local amount="$5"
+    local result="$6"
+    local counterparty="$7"
+
+    if [[ -z "$counterparty" ]]; then
+        jq -e \
+            --arg eventType "$event_type" \
+            --arg userId "$user_id" \
+            --arg accountNumber "$account_number" \
+            --arg amount "$amount" \
+            --arg result "$result" \
+            '.eventType == $eventType and
+             (.userId | tostring) == $userId and
+             .accountNumber == $accountNumber and
+             (.amount | tonumber) == ($amount | tonumber) and
+             .result == $result and
+             .counterpartyAccountNumber == null' \
+            <<<"$message" >/dev/null 2>&1
+    else
+        jq -e \
+            --arg eventType "$event_type" \
+            --arg userId "$user_id" \
+            --arg accountNumber "$account_number" \
+            --arg amount "$amount" \
+            --arg result "$result" \
+            --arg counterparty "$counterparty" \
+            '.eventType == $eventType and
+             (.userId | tostring) == $userId and
+             .accountNumber == $accountNumber and
+             (.amount | tonumber) == ($amount | tonumber) and
+             .result == $result and
+             .counterpartyAccountNumber == $counterparty' \
+            <<<"$message" >/dev/null 2>&1
+    fi
+}
+
+assert_kafka_event_present() {
+    local messages="$1"
+    local event_type="$2"
+    local user_id="$3"
+    local account_number="$4"
+    local amount="$5"
+    local result="$6"
+    local counterparty="$7"
+    local description="$8"
+    local line
+    local value
+
+    while IFS= read -r line; do
+        [[ "$line" == *'|'* ]] || continue
+        value="${line#*|}"
+        if kafka_message_matches "$value" "$event_type" "$user_id" "$account_number" "$amount" "$result" "$counterparty"; then
+            return
+        fi
+    done <<<"$messages"
+
+    fail "$description"
+}
+
+assert_kafka_event_absent() {
+    local messages="$1"
+    local event_type="$2"
+    local user_id="$3"
+    local account_number="$4"
+    local amount="$5"
+    local result="$6"
+    local counterparty="$7"
+    local description="$8"
+    local line
+    local value
+
+    while IFS= read -r line; do
+        [[ "$line" == *'|'* ]] || continue
+        value="${line#*|}"
+        if kafka_message_matches "$value" "$event_type" "$user_id" "$account_number" "$amount" "$result" "$counterparty"; then
+            fail "$description"
+        fi
+    done <<<"$messages"
 }
 
 assert_db_scalar() {
@@ -423,6 +615,9 @@ verify_auth_and_jwks() {
         --arg username "$USERNAME"
     TOKEN="$(jq -er '.token' <<<"$HTTP_BODY")"
     assert_rs256_token "$TOKEN" 'Login response'
+    IFS='.' read -r _ TOKEN_PAYLOAD _ <<<"$TOKEN"
+    TOKEN_PAYLOAD="$(decode_jwt_segment "$TOKEN_PAYLOAD")"
+    USER_ID="$(jq -er '.sub' <<<"$TOKEN_PAYLOAD")"
     pass 'User login returns an RS256 JWT'
 }
 
@@ -595,6 +790,142 @@ verify_banking_api() {
     SECOND_ACCOUNT="$second_account"
 }
 
+verify_kafka_and_notifications() {
+    local kafka_messages
+    local notification_logs
+    local declined_transfer_amount='999999.99'
+
+    request POST "/api/v2/accounts/$FIRST_ACCOUNT/transfers" "$TOKEN" \
+        "{\"amount\":$declined_transfer_amount,\"toAccountNumber\":\"$SECOND_ACCOUNT\",\"description\":\"declined transfer\"}" \
+        'Idempotency-Key: verify-declined-transfer'
+    expect_status 422 'v2 declined transfer'
+
+    request GET "/api/v2/accounts/$FIRST_ACCOUNT" "$TOKEN"
+    expect_status 200 'Source account after declined transfer'
+    assert_balance 100.00 'Declined transfer changed the source balance'
+
+    kafka_messages="$(kafka_topic_messages)"
+    notification_logs="$(compose logs --no-color --no-log-prefix notification-service)"
+
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'DEPOSIT' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '100.00' \
+        'SUCCESS' \
+        '' \
+        'Kafka topic did not contain the successful v1 deposit event'
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'WITHDRAWAL' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '10.00' \
+        'SUCCESS' \
+        '' \
+        'Kafka topic did not contain the successful v1 withdrawal event'
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'TRANSFER' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '15.00' \
+        'SUCCESS' \
+        "$SECOND_ACCOUNT" \
+        'Kafka topic did not contain the successful v1 transfer event'
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'DEPOSIT' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '50.00' \
+        'SUCCESS' \
+        '' \
+        'Kafka topic did not contain the successful v2 deposit event'
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'WITHDRAWAL' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '5.00' \
+        'SUCCESS' \
+        '' \
+        'Kafka topic did not contain the successful v2 withdrawal event'
+    assert_kafka_event_present \
+        "$kafka_messages" \
+        'TRANSFER' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        '20.00' \
+        'SUCCESS' \
+        "$SECOND_ACCOUNT" \
+        'Kafka topic did not contain the successful v2 transfer event'
+
+    assert_kafka_event_absent \
+        "$kafka_messages" \
+        'TRANSFER' \
+        "$USER_ID" \
+        "$FIRST_ACCOUNT" \
+        "$declined_transfer_amount" \
+        'DECLINED' \
+        "$SECOND_ACCOUNT" \
+        'Kafka topic unexpectedly contained the declined transfer event'
+
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'DEPOSIT' AND amount = 100.00" \
+        1 \
+        'Notification log missing successful v1 deposit'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'WITHDRAWAL' AND amount = 10.00" \
+        1 \
+        'Notification log missing successful v1 withdrawal'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'TRANSFER' AND amount = 15.00" \
+        1 \
+        'Notification log missing successful v1 transfer'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'DEPOSIT' AND amount = 50.00" \
+        1 \
+        'Notification log missing successful v2 deposit'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'WITHDRAWAL' AND amount = 5.00" \
+        1 \
+        'Notification log missing successful v2 withdrawal'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'TRANSFER' AND amount = 20.00" \
+        1 \
+        'Notification log missing successful v2 transfer'
+    assert_db_scalar \
+        notification-db \
+        "SELECT COUNT(*) FROM notification_logs WHERE event_type = 'TRANSFER' AND amount = $declined_transfer_amount" \
+        0 \
+        'Notification log unexpectedly recorded the declined transfer'
+
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=100.00 eventType=DEPOSIT"* ]] ||
+        fail 'notification-service did not log the successful v1 deposit'
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=10.00 eventType=WITHDRAWAL"* ]] ||
+        fail 'notification-service did not log the successful v1 withdrawal'
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=15.00 eventType=TRANSFER"* ]] ||
+        fail 'notification-service did not log the successful v1 transfer'
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=50.00 eventType=DEPOSIT"* ]] ||
+        fail 'notification-service did not log the successful v2 deposit'
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=5.00 eventType=WITHDRAWAL"* ]] ||
+        fail 'notification-service did not log the successful v2 withdrawal'
+    [[ "$notification_logs" == *"NOTIFICATION: user=$USER_ID amount=20.00 eventType=TRANSFER"* ]] ||
+        fail 'notification-service did not log the successful v2 transfer'
+    [[ "$notification_logs" != *"amount=$declined_transfer_amount"* ]] ||
+        fail 'notification-service logged the declined transfer'
+
+    pass 'Kafka topic and notification-service logs reflect successful money-movement events'
+}
+
 verify_schema_split() {
     local adminer_status
 
@@ -642,6 +973,9 @@ verify_persistence() {
     compose down --remove-orphans
     compose up --detach
     wait_for_stack
+    wait_for_kafka_broker
+    wait_for_kafka_topic
+    wait_for_kafka_group_coordination
 
     BASE_URL="$AUTH_URL"
     request POST /api/auth/login '' "$LOGIN_BODY"
@@ -675,9 +1009,13 @@ fi
 printf '[INFO] Building and starting the Compose stack\n'
 compose up --build --detach
 wait_for_stack
+wait_for_kafka_broker
+wait_for_kafka_topic
+wait_for_kafka_group_coordination
 
 verify_auth_and_jwks
 verify_banking_api
+verify_kafka_and_notifications
 verify_schema_split
 verify_persistence
 

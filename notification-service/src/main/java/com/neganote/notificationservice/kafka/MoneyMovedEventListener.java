@@ -1,5 +1,6 @@
 package com.neganote.notificationservice.kafka;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.neganote.notificationservice.entity.NotificationLog;
 import com.neganote.notificationservice.repository.NotificationLogRepository;
 import lombok.RequiredArgsConstructor;
@@ -13,23 +14,29 @@ import org.springframework.stereotype.Component;
 public class MoneyMovedEventListener {
 
     private final NotificationLogRepository notificationLogRepository;
-
+    private final ObjectMapper objectMapper;
     private static Logger logger = LoggerFactory.getLogger(MoneyMovedEventListener.class);
 
     @KafkaListener(topics = "banking.money-movements", groupId = "notifications", concurrency = "3")
-    public void onEvent(MoneyMovedEvent event) {
-        if (notificationLogRepository.existsByEventId(event.eventId())) {
-            logger.info("Skipping duplicate event {}", event.eventId());
-            return;
+    public void onEvent(String messageJson) {
+        try {
+            MoneyMovedEvent event = objectMapper.readValue(messageJson, MoneyMovedEvent.class);
+            if (notificationLogRepository.existsByEventId(event.eventId())) {
+                logger.info("Skipping duplicate event {}", event.eventId());
+                return;
+            }
+            if ("SUCCESS".equals(event.result())) {
+                logger.info("NOTIFICATION: user={} amount={} eventType={} — sent via SMS (simulated)",
+                        event.userId(), event.amount(), event.eventType());
+            }
+            notificationLogRepository.save(NotificationLog.builder()
+                    .eventId(event.eventId())
+                    .eventType(event.eventType())
+                    .amount(event.amount())
+                    .build());
+        } catch (Exception e) {
+            logger.error("Failed to deserialize event", e);
+            throw new RuntimeException("Failed to process event", e);
         }
-        if ("SUCCESS".equals(event.result())) {
-            logger.info("NOTIFICATION: user={} amount={} eventType={} — sent via SMS (simulated)",
-                    event.userId(), event.amount(), event.eventType());
-        }
-        notificationLogRepository.save(NotificationLog.builder()
-                        .eventId(event.eventId())
-                        .eventType(event.eventType())
-                        .amount(event.amount())
-                .build());
     }
 }
