@@ -5,8 +5,8 @@
 set -Eeuo pipefail
 
 # Global variables for HTTP interactions
-declare -g HTTP_BODY=""
-declare -g HTTP_STATUS=""
+export HTTP_BODY=""
+export HTTP_STATUS=""
 
 # Base URLs - overrideable via environment
 declare -g AUTH_URL="${AUTH_URL:-http://localhost:8081}"
@@ -32,15 +32,27 @@ request() {
     local path="$2"
     local token="${3-}"
     local payload="${4-}"
+    local base_url="${BASE_URL:-}"
     local -a curl_args
     local response
-    
+
+    if [[ -z "$base_url" ]]; then
+        case "$path" in
+            /api/auth*|/.well-known*)
+                base_url="$AUTH_URL"
+                ;;
+            *)
+                base_url="$BANKING_URL"
+                ;;
+        esac
+    fi
+
     curl_args=(
         -sS
         --connect-timeout 5
         --max-time 20
         -X "$method"
-        "${BASE_URL}${path}"
+        "${base_url}${path}"
         -H 'Accept: application/json'
     )
     
@@ -114,7 +126,7 @@ db_query() {
     esac
     
     compose exec -T "$service" sh -c \
-        'mysql --protocol=socket -uroot -p"$MYSQL_ROOT_PASSWORD" -D "$1" -N -B -e "$2"' \
+        "mysql --protocol=socket -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -D \"\$1\" -N -B -e \"\$2\"" \
         sh "$database" "$sql"
 }
 
@@ -188,17 +200,18 @@ assert_json_contains() {
     local filter="$1"
     local description="$2"
     shift 2
-    
+
     if ! jq -e "$filter" "$@" <<<"$HTTP_BODY" >/dev/null 2>&1; then
+        printf '[ASSERT] %s\n' "$description" >&2
         return 1
     fi
 }
 
 assert_balance() {
     local expected="$1"
-    
+
     assert_json_contains \
-        '.balance == ($expected | tonumber)' \
+        ".balance == (\$expected | tonumber)" \
         "Balance assertion" \
         --arg expected "$expected"
 }

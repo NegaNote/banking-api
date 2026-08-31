@@ -9,11 +9,9 @@ declare -g AUTH_TEST_USERNAME=""
 declare -g AUTH_TEST_EMAIL=""
 declare -g AUTH_TEST_PASSWORD="Password123!"
 declare -g AUTH_TEST_TOKEN=""
-declare -g AUTH_TEST_USER_ID=""
 
 # Test: JWKS endpoint returns valid RS256 keys
 test_jwks_endpoint_valid() {
-    BASE_URL="$AUTH_URL"
     request GET '/.well-known/jwks.json'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -28,7 +26,6 @@ test_jwks_endpoint_valid() {
 
 # Test: JWKS contains no private key material
 test_jwks_no_private_keys() {
-    BASE_URL="$AUTH_URL"
     request GET '/.well-known/jwks.json'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -44,13 +41,13 @@ test_user_registration_success() {
     AUTH_TEST_USERNAME="verify-$(date -u +%Y%m%d%H%M%S)-$$"
     AUTH_TEST_EMAIL="${AUTH_TEST_USERNAME}@example.com"
     
-    local register_body=$(jq -cn \
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$AUTH_TEST_USERNAME" \
         --arg email "$AUTH_TEST_EMAIL" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     
     [[ "$HTTP_STATUS" == "201" ]] || return 1
@@ -72,21 +69,19 @@ test_user_registration_success() {
     header_json="$(decode_jwt_segment "$token_header")"
     jq -e '.alg == "RS256" and .kid == "auth-key-1"' <<<"$header_json" >/dev/null 2>&1 || return 1
     
-    # Extract user ID from token payload
-    local token_payload
-    token_payload="$(extract_jwt_payload "$AUTH_TEST_TOKEN")"
-    AUTH_TEST_USER_ID="$(jq -er '.sub' <<<"$token_payload")"
+    # Extract and validate JWT
+    extract_jwt_payload "$AUTH_TEST_TOKEN" >/dev/null
 }
 
 # Test: Registration fails with invalid email
 test_user_registration_invalid_email() {
-    local register_body=$(jq -cn \
+    local register_body
+    register_body=$(jq -cn \
         --arg username "user-$(date +%s)" \
         --arg email "not-an-email" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     
     # Should reject with 4xx status
@@ -95,13 +90,13 @@ test_user_registration_invalid_email() {
 
 # Test: Registration fails with weak password
 test_user_registration_weak_password() {
-    local register_body=$(jq -cn \
+    local register_body
+    register_body=$(jq -cn \
         --arg username "user-$(date +%s)" \
         --arg email "user@example.com" \
         --arg password "weak" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     
     [[ "$HTTP_STATUS" =~ ^4 ]] || return 1
@@ -110,14 +105,15 @@ test_user_registration_weak_password() {
 # Test: Registration fails with duplicate username
 test_user_registration_duplicate_username() {
     # First registration
-    local username="duplicate-$(date +%s%N)"
-    local register_body=$(jq -cn \
+    local username
+    username="duplicate-$(date +%s%N)"
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$username" \
         --arg email "${username}@example.com" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     [[ "$HTTP_STATUS" == "201" ]] || return 1
     
@@ -141,12 +137,12 @@ test_user_login_success() {
         return 0
     fi
     
-    local login_body=$(jq -cn \
+    local login_body
+    login_body=$(jq -cn \
         --arg username "$AUTH_TEST_USERNAME" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/login '' "$login_body"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -165,12 +161,12 @@ test_user_login_success() {
 test_user_login_invalid_password() {
     [[ -n "$AUTH_TEST_USERNAME" ]] || skip_test "Requires prior registration test"
     
-    local login_body=$(jq -cn \
+    local login_body
+    login_body=$(jq -cn \
         --arg username "$AUTH_TEST_USERNAME" \
         --arg password "WrongPassword123!" \
         '{username: $username, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/login '' "$login_body"
     
     [[ "$HTTP_STATUS" =~ ^4 ]] || return 1
@@ -178,12 +174,12 @@ test_user_login_invalid_password() {
 
 # Test: Login fails with non-existent user
 test_user_login_nonexistent_user() {
-    local login_body=$(jq -cn \
+    local login_body
+    login_body=$(jq -cn \
         --arg username "nonexistent-$(date +%s)" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/login '' "$login_body"
     
     [[ "$HTTP_STATUS" =~ ^4 ]] || return 1
@@ -193,9 +189,9 @@ test_user_login_nonexistent_user() {
 test_tampered_jwt_rejected() {
     [[ -n "$AUTH_TEST_TOKEN" ]] || skip_test "Requires prior authentication test"
     
-    local tampered=$(tamper_jwt "$AUTH_TEST_TOKEN")
+    local tampered
+    tampered=$(tamper_jwt "$AUTH_TEST_TOKEN")
     
-    BASE_URL="$AUTH_URL"
     request GET '/api/auth/validate' "$tampered"
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -205,7 +201,6 @@ test_tampered_jwt_rejected() {
 test_malformed_jwt_missing_segment() {
     local malformed="invalid.jwt"
     
-    BASE_URL="$AUTH_URL"
     request GET '/api/auth/validate' "$malformed"
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -215,7 +210,6 @@ test_malformed_jwt_missing_segment() {
 test_invalid_jwt_encoding() {
     local invalid_jwt="invalid!header.invalid!payload.invalid!signature"
     
-    BASE_URL="$AUTH_URL"
     request GET '/api/auth/validate' "$invalid_jwt"
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -244,7 +238,6 @@ test_jwt_without_bearer_prefix() {
 
 # Test: Missing Authorization header requires auth
 test_missing_auth_header() {
-    BASE_URL="$BANKING_URL"
     request GET '/api/v1/accounts'
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -312,12 +305,12 @@ test_multiple_spaces_in_auth_header() {
 
 # Test: User cannot register with null password
 test_registration_null_password() {
-    local register_body=$(jq -cn \
+    local register_body
+    register_body=$(jq -cn \
         --arg username "user-$(date +%s)" \
         --arg email "user@example.com" \
         '{username: $username, email: $email, password: null}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     
     [[ "$HTTP_STATUS" =~ ^4 ]] || return 1
@@ -325,15 +318,16 @@ test_registration_null_password() {
 
 # Test: User cannot register with oversized username
 test_registration_oversized_username() {
-    local long_username=$(printf 'a%.0s' {1..1000})
-    
-    local register_body=$(jq -cn \
+    local long_username
+    long_username=$(printf 'a%.0s' {1..1000})
+
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$long_username" \
         --arg email "user@example.com" \
         --arg password "$AUTH_TEST_PASSWORD" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     
     [[ "$HTTP_STATUS" =~ ^4 ]] || return 1

@@ -6,33 +6,31 @@ set -Eeuo pipefail
 
 # Test data for banking operations
 declare -g BANKING_TEST_TOKEN=""
-declare -g BANKING_TEST_USER_ID=""
 declare -g BANKING_TEST_ACCOUNT1=""
 declare -g BANKING_TEST_ACCOUNT2=""
 
 # Setup: Create test user with authenticated token
 setup_banking_user() {
-    local username="banking-$(date +%s%N)"
-    local email="${username}@example.com"
-    
-    local register_body=$(jq -cn \
+    local username
+    username="banking-$(date +%s%N)"
+    local email
+    email="${username}@example.com"
+
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$username" \
         --arg email "$email" \
         --arg password "Password123!" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     [[ "$HTTP_STATUS" == "201" ]] || return 1
     
     BANKING_TEST_TOKEN="$(jq -er '.token' <<<"$HTTP_BODY")"
-    BANKING_TEST_PAYLOAD="$(extract_jwt_payload "$BANKING_TEST_TOKEN")"
-    BANKING_TEST_USER_ID="$(jq -er '.sub' <<<"$BANKING_TEST_PAYLOAD")"
 }
 
 # Test: Unauthenticated account list returns 401/403
 test_unauthenticated_account_list() {
-    BASE_URL="$BANKING_URL"
     request GET /api/v1/accounts
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -42,9 +40,9 @@ test_unauthenticated_account_list() {
 test_tampered_token_account_access() {
     [[ -n "$BANKING_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    local tampered=$(tamper_jwt "$BANKING_TEST_TOKEN")
+    local tampered
+    tampered=$(tamper_jwt "$BANKING_TEST_TOKEN")
     
-    BASE_URL="$BANKING_URL"
     request GET /api/v1/accounts "$tampered"
     
     [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]] || return 1
@@ -54,7 +52,6 @@ test_tampered_token_account_access() {
 test_initial_account_list_empty() {
     [[ -n "$BANKING_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET /api/v1/accounts "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -65,7 +62,6 @@ test_initial_account_list_empty() {
 test_create_account_v1() {
     [[ -n "$BANKING_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$BANKING_TEST_TOKEN" '{}'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -78,7 +74,6 @@ test_create_account_v1() {
 test_create_second_account() {
     [[ -n "$BANKING_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$BANKING_TEST_TOKEN" '{}'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -92,7 +87,6 @@ test_create_second_account() {
 test_list_accounts_contains_created() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" && -n "$BANKING_TEST_ACCOUNT2" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET /api/v1/accounts "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -106,15 +100,16 @@ test_list_accounts_contains_created() {
 test_v1_v2_account_list_consistency() {
     [[ -n "$BANKING_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     request GET /api/v1/accounts "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local v1_accounts="$(canonical_json "$HTTP_BODY")"
-    
+    local v1_accounts
+    v1_accounts="$(canonical_json "$HTTP_BODY")"
+
     request GET /api/v2/accounts "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local v2_accounts="$(canonical_json "$HTTP_BODY")"
+    local v2_accounts
+    v2_accounts="$(canonical_json "$HTTP_BODY")"
     
     [[ "$v1_accounts" == "$v2_accounts" ]] || return 1
 }
@@ -123,7 +118,6 @@ test_v1_v2_account_list_consistency() {
 test_get_account_details() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1" "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -134,7 +128,6 @@ test_get_account_details() {
 test_v1_deposit() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 100.00}'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -145,7 +138,6 @@ test_v1_deposit() {
 test_v1_withdrawal() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/withdrawals" "$BANKING_TEST_TOKEN" '{"amount": 10.00}'
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -156,7 +148,6 @@ test_v1_withdrawal() {
 test_v1_transfer() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" && -n "$BANKING_TEST_ACCOUNT2" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/transfers" "$BANKING_TEST_TOKEN" \
         "{\"amount\": 15.00, \"toAccountNumber\": \"$BANKING_TEST_ACCOUNT2\", \"description\": \"v1 transfer\"}"
     
@@ -168,7 +159,6 @@ test_v1_transfer() {
 test_v2_deposit_requires_idempotency_key() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 50.00}'
     
     [[ "$HTTP_STATUS" == "400" ]] || return 1
@@ -178,7 +168,6 @@ test_v2_deposit_requires_idempotency_key() {
 test_v2_deposit_with_idempotency_key() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 50.00}' \
         'Idempotency-Key: banking-deposit-v2'
     
@@ -190,19 +179,20 @@ test_v2_deposit_with_idempotency_key() {
 test_v2_idempotency_replay() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Replay same request with same idempotency key and body
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 50.00}' \
         'Idempotency-Key: banking-deposit-v2'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local first_response="$(canonical_json "$HTTP_BODY")"
-    
+    local first_response
+    first_response="$(canonical_json "$HTTP_BODY")"
+
     # Replay same request (should return cached response)
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 50.00}' \
         'Idempotency-Key: banking-deposit-v2'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local replay_response="$(canonical_json "$HTTP_BODY")"
+    local replay_response
+    replay_response="$(canonical_json "$HTTP_BODY")"
     
     [[ "$first_response" == "$replay_response" ]] || return 1
 }
@@ -211,7 +201,6 @@ test_v2_idempotency_replay() {
 test_v2_idempotency_conflict() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Use same idempotency key from the deposit test with different body
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/deposits" "$BANKING_TEST_TOKEN" '{"amount": 100.00}' \
@@ -224,7 +213,6 @@ test_v2_idempotency_conflict() {
 test_v2_withdrawal_idempotent() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/withdrawals" "$BANKING_TEST_TOKEN" '{"amount": 5.00}' \
         'Idempotency-Key: banking-withdrawal-v2'
     
@@ -236,7 +224,6 @@ test_v2_withdrawal_idempotent() {
 test_v2_transfer_idempotent() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" && -n "$BANKING_TEST_ACCOUNT2" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/transfers" "$BANKING_TEST_TOKEN" \
         "{\"amount\": 20.00, \"toAccountNumber\": \"$BANKING_TEST_ACCOUNT2\", \"description\": \"v2 transfer\"}" \
         'Idempotency-Key: banking-transfer-v2'
@@ -249,7 +236,6 @@ test_v2_transfer_idempotent() {
 test_transfer_recipient_receives_funds() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT2" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET "/api/v2/accounts/$BANKING_TEST_ACCOUNT2" "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -261,7 +247,6 @@ test_transfer_recipient_receives_funds() {
 test_v1_transaction_history() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/transactions" "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -274,15 +259,16 @@ test_v1_transaction_history() {
 test_v2_v1_transaction_history_consistency() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/transactions" "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local v1_history="$(canonical_json "$HTTP_BODY")"
-    
+    local v1_history
+    v1_history="$(canonical_json "$HTTP_BODY")"
+
     request GET "/api/v2/accounts/$BANKING_TEST_ACCOUNT1/transactions" "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local v2_history="$(canonical_json "$HTTP_BODY")"
+    local v2_history
+    v2_history="$(canonical_json "$HTTP_BODY")"
     
     [[ "$v1_history" == "$v2_history" ]] || return 1
 }
@@ -291,7 +277,6 @@ test_v2_v1_transaction_history_consistency() {
 test_transaction_history_types() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/transactions" "$BANKING_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -305,12 +290,12 @@ test_transaction_history_types() {
 test_declined_transfer_no_balance_change() {
     [[ -n "$BANKING_TEST_TOKEN" && -n "$BANKING_TEST_ACCOUNT1" && -n "$BANKING_TEST_ACCOUNT2" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Get current balance
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1" "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local current_balance=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local current_balance
+    current_balance=$(jq -er '.balance' <<<"$HTTP_BODY")
     
     # Try to transfer more than balance
     request POST "/api/v1/accounts/$BANKING_TEST_ACCOUNT1/transfers" "$BANKING_TEST_TOKEN" \
@@ -321,7 +306,8 @@ test_declined_transfer_no_balance_change() {
     # Verify balance unchanged
     request GET "/api/v1/accounts/$BANKING_TEST_ACCOUNT1" "$BANKING_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local new_balance=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local new_balance
+    new_balance=$(jq -er '.balance' <<<"$HTTP_BODY")
     
     [[ "$current_balance" == "$new_balance" ]] || return 1
 }

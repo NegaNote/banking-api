@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091
 # Banking API Compose Verification - v2
 # Refactored test framework with modular test suites, structured reporting, and parallel execution
 
 set -Eeuo pipefail
 
-# Configuration
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT_DIR="$ROOT_DIR/scripts"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"
 TESTS_DIR="$SCRIPT_DIR/tests"
+
+# shellcheck source=./lib/test-framework.sh
+source "$LIB_DIR/test-framework.sh"
+# shellcheck source=./lib/test-helpers.sh
+source "$LIB_DIR/test-helpers.sh"
+
+# Configuration
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 
 # URLs and timeouts
+declare -g DOCKER=(docker)
 AUTH_URL="${AUTH_URL:-http://localhost:8081}"
 BANKING_URL="${BANKING_URL:-http://localhost:8080}"
 ADMINER_URL="${ADMINER_URL:-http://localhost:8090}"
@@ -24,11 +32,6 @@ NO_SUDO=0
 RUN_SUITE=""
 RUN_TEST=""
 OUTPUT_FORMAT="text"
-PARALLEL_TESTS=0
-
-# Import framework and helpers
-source "$LIB_DIR/test-framework.sh"
-source "$LIB_DIR/test-helpers.sh"
 
 usage() {
     cat <<'EOF'
@@ -88,9 +91,6 @@ parse_args() {
                 OUTPUT_FORMAT="$2"
                 shift
                 ;;
-            --parallel)
-                PARALLEL_TESTS=1
-                ;;
             -h|--help)
                 usage
                 exit 0
@@ -109,10 +109,8 @@ setup_docker() {
     if ((NO_SUDO)); then
         DOCKER=(docker)
     else
-        # Check if docker needs sudo
-        if docker compose version >/dev/null 2>&1; then
-            DOCKER=(docker)
-        else
+        DOCKER=(docker)
+        if ! "${DOCKER[@]}" compose version >/dev/null 2>&1; then
             DOCKER=(sudo docker)
         fi
     fi
@@ -165,7 +163,7 @@ check_layout() {
     submodule_status="$(git -C "$ROOT_DIR" submodule status --recursive)"
     while IFS= read -r line; do
         [[ "$line" != -* ]] || {
-            printf '[ERROR] Uninitialized submodule: ${line:1}\n' >&2
+            printf '[ERROR] Uninitialized submodule: %s\n' "${line:1}" >&2
             exit 1
         }
     done <<<"$submodule_status"
@@ -201,9 +199,13 @@ compose_up() {
 }
 
 load_test_suites() {
+    # shellcheck source=./tests/test-auth.sh
     source "$TESTS_DIR/test-auth.sh"
+    # shellcheck source=./tests/test-banking.sh
     source "$TESTS_DIR/test-banking.sh"
+    # shellcheck source=./tests/test-edge-cases.sh
     source "$TESTS_DIR/test-edge-cases.sh"
+    # shellcheck source=./tests/test-integration.sh
     source "$TESTS_DIR/test-integration.sh"
     
     # Register all tests

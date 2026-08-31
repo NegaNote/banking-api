@@ -3,26 +3,25 @@
 # Tests for cross-user access, Kafka/notification flow, concurrent requests, etc.
 
 set -Eeuo pipefail
-
 # Test data for two users
 declare -g INT_USER1_TOKEN=""
 declare -g INT_USER1_ID=""
 declare -g INT_USER1_ACCOUNT=""
 declare -g INT_USER2_TOKEN=""
-declare -g INT_USER2_ID=""
 declare -g INT_USER2_ACCOUNT=""
 
 # Setup: Create two test users
 setup_two_users() {
     # User 1
-    local user1_name="int-user1-$(date +%s%N)"
-    local register_body=$(jq -cn \
+    local user1_name
+    user1_name="int-user1-$(date +%s%N)"
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$user1_name" \
         --arg email "${user1_name}@example.com" \
         --arg password "Password123!" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     [[ "$HTTP_STATUS" == "201" ]] || return 1
     
@@ -30,7 +29,8 @@ setup_two_users() {
     INT_USER1_ID="$(jq -er '.sub' <<<"$(extract_jwt_payload "$INT_USER1_TOKEN")")"
     
     # User 2
-    local user2_name="int-user2-$(date +%s%N)"
+    local user2_name
+    user2_name="int-user2-$(date +%s%N)"
     register_body=$(jq -cn \
         --arg username "$user2_name" \
         --arg email "${user2_name}@example.com" \
@@ -41,10 +41,8 @@ setup_two_users() {
     [[ "$HTTP_STATUS" == "201" ]] || return 1
     
     INT_USER2_TOKEN="$(jq -er '.token' <<<"$HTTP_BODY")"
-    INT_USER2_ID="$(jq -er '.sub' <<<"$(extract_jwt_payload "$INT_USER2_TOKEN")")"
-    
+
     # Create accounts for both users
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$INT_USER1_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
     INT_USER1_ACCOUNT="$(jq -er '.accountNumber' <<<"$HTTP_BODY")"
@@ -58,7 +56,6 @@ setup_two_users() {
 test_user_cannot_view_other_accounts() {
     [[ -n "$INT_USER1_TOKEN" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # User 1 lists accounts
     request GET /api/v1/accounts "$INT_USER1_TOKEN"
@@ -80,7 +77,6 @@ test_user_cannot_view_other_accounts() {
 test_user_cannot_view_other_account_details() {
     [[ -n "$INT_USER1_TOKEN" && -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # User 2 tries to access User 1's account details
     request GET "/api/v1/accounts/$INT_USER1_ACCOUNT" "$INT_USER2_TOKEN"
@@ -93,7 +89,6 @@ test_user_cannot_view_other_account_details() {
 test_user_cannot_deposit_to_other_account() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER2_TOKEN" '{"amount": 100.00}'
     
@@ -104,7 +99,6 @@ test_user_cannot_deposit_to_other_account() {
 test_user_cannot_withdraw_from_other_account() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # First deposit some funds to user 1's account
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -120,7 +114,6 @@ test_user_cannot_withdraw_from_other_account() {
 test_user_cannot_transfer_from_other_account() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_ACCOUNT" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Deposit to user 1's account
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -137,7 +130,6 @@ test_user_cannot_transfer_from_other_account() {
 test_user_cannot_view_other_account_transactions() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Deposit to user 1's account
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -153,16 +145,17 @@ test_user_cannot_view_other_account_transactions() {
 test_valid_transfer_between_users() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Capture balances before the test operations
     request GET "/api/v1/accounts/$INT_USER1_ACCOUNT" "$INT_USER1_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user1_balance_before=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local user1_balance_before
+    user1_balance_before=$(jq -er '.balance' <<<"$HTTP_BODY")
     
     request GET "/api/v1/accounts/$INT_USER2_ACCOUNT" "$INT_USER2_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user2_balance_before=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local user2_balance_before
+    user2_balance_before=$(jq -er '.balance' <<<"$HTTP_BODY")
     
     # Deposit to user 1
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -176,15 +169,19 @@ test_valid_transfer_between_users() {
     # Verify User 1 balance increased by 100 then decreased by 50 (net +50)
     request GET "/api/v1/accounts/$INT_USER1_ACCOUNT" "$INT_USER1_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user1_balance_after=$(jq -er '.balance' <<<"$HTTP_BODY")
-    local user1_expected=$(awk "BEGIN {printf \"%.2f\", $user1_balance_before + 50.00}")
+    local user1_balance_after
+    user1_balance_after=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local user1_expected
+    user1_expected=$(awk "BEGIN {printf \"%.2f\", $user1_balance_before + 50.00}")
     [[ "$user1_balance_after" == "$user1_expected" ]] || return 1
     
     # Verify User 2 received 50
     request GET "/api/v1/accounts/$INT_USER2_ACCOUNT" "$INT_USER2_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user2_balance_after=$(jq -er '.balance' <<<"$HTTP_BODY")
-    local user2_expected=$(awk "BEGIN {printf \"%.2f\", $user2_balance_before + 50.00}")
+    local user2_balance_after
+    user2_balance_after=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local user2_expected
+    user2_expected=$(awk "BEGIN {printf \"%.2f\", $user2_balance_before + 50.00}")
     [[ "$user2_balance_after" == "$user2_expected" ]] || return 1
 }
 
@@ -192,7 +189,6 @@ test_valid_transfer_between_users() {
 test_kafka_events_contain_correct_user_id() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_ACCOUNT" && -n "$INT_USER1_TOKEN" && -n "$INT_USER1_ID" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Deposit and transfer
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -220,11 +216,10 @@ test_kafka_events_contain_correct_user_id() {
 test_concurrent_deposits_consistency() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Make 5 concurrent requests
     local pids=()
-    for i in {1..5}; do
+    for _ in {1..5}; do
         (
             request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 10.00}'
             [[ "$HTTP_STATUS" == "200" ]] || exit 1
@@ -243,7 +238,8 @@ test_concurrent_deposits_consistency() {
     # Verify final balance is 50.00
     request GET "/api/v1/accounts/$INT_USER1_ACCOUNT" "$INT_USER1_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local balance=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local balance
+    balance=$(jq -er '.balance' <<<"$HTTP_BODY")
     [[ "$balance" == "50.00" ]] || return 1
 }
 
@@ -251,7 +247,6 @@ test_concurrent_deposits_consistency() {
 test_concurrent_withdrawals_insufficient_funds() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # Deposit only 100
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 100.00}'
@@ -259,8 +254,7 @@ test_concurrent_withdrawals_insufficient_funds() {
     
     # Try 3 concurrent withdrawals of 50 each (total 150 > 100)
     local pids=()
-    local results=()
-    for i in {1..3}; do
+    for _ in {1..3}; do
         (
             request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/withdrawals" "$INT_USER1_TOKEN" '{"amount": 50.00}'
             # First should succeed, others should fail
@@ -288,19 +282,20 @@ test_idempotency_key_per_user() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER2_ACCOUNT" && \
        -n "$INT_USER1_TOKEN" && -n "$INT_USER2_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     # User 1 uses idempotency key
     request POST "/api/v2/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 50.00}' \
         'Idempotency-Key: shared-key'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user1_response="$(canonical_json "$HTTP_BODY")"
+    local user1_response
+    user1_response="$(canonical_json "$HTTP_BODY")"
     
     # User 2 uses same idempotency key (should be independent)
     request POST "/api/v2/accounts/$INT_USER2_ACCOUNT/deposits" "$INT_USER2_TOKEN" '{"amount": 50.00}' \
         'Idempotency-Key: shared-key'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local user2_response="$(canonical_json "$HTTP_BODY")"
+    local user2_response
+    user2_response="$(canonical_json "$HTTP_BODY")"
     
     # Responses should be different (different accounts, balances)
     [[ "$user1_response" != "$user2_response" ]] || return 1
@@ -311,7 +306,6 @@ test_notification_service_multi_user_events() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
     
     # Perform a transaction
-    BASE_URL="$BANKING_URL"
     request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 50.00}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
     
@@ -327,7 +321,6 @@ test_notification_service_multi_user_events() {
 test_reporting_service_receives_kafka_events() {
     [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     local before_count
     before_count="$(db_query reporting-db "SELECT COUNT(*) FROM reporting_logs")"
     

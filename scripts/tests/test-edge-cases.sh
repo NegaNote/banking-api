@@ -3,25 +3,23 @@
 # Tests for boundary conditions, malformed input, and security issues
 
 set -Eeuo pipefail
-
 # Setup: Register test user and create account
 setup_edge_case_user() {
-    local username="edge-$(date +%s%N)"
+    local username
+    username="edge-$(date +%s%N)"
     local email="${username}@example.com"
     
-    local register_body=$(jq -cn \
+    local register_body
+    register_body=$(jq -cn \
         --arg username "$username" \
         --arg email "$email" \
         --arg password "Password123!" \
         '{username: $username, email: $email, password: $password}')
     
-    BASE_URL="$AUTH_URL"
     request POST /api/auth/register '' "$register_body"
     [[ "$HTTP_STATUS" == "201" ]] || return 1
     
     EDGE_TEST_TOKEN="$(jq -er '.token' <<<"$HTTP_BODY")"
-    EDGE_TEST_PAYLOAD="$(extract_jwt_payload "$EDGE_TEST_TOKEN")"
-    EDGE_TEST_USER_ID="$(jq -er '.sub' <<<"$EDGE_TEST_PAYLOAD")"
 }
 
 # Test: Negative deposit amount rejected
@@ -29,10 +27,10 @@ test_negative_deposit_rejected() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
     # Create account first
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # Try negative deposit
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": -50.00}'
@@ -44,10 +42,10 @@ test_negative_deposit_rejected() {
 test_zero_deposit_handling() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 0.00}'
     
@@ -59,10 +57,10 @@ test_zero_deposit_handling() {
 test_negative_withdrawal_rejected() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # Deposit first
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
@@ -78,10 +76,10 @@ test_negative_withdrawal_rejected() {
 test_withdrawal_insufficient_funds() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # Deposit only 50
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 50.00}'
@@ -97,10 +95,10 @@ test_withdrawal_insufficient_funds() {
 test_transfer_nonexistent_account() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -116,10 +114,10 @@ test_transfer_nonexistent_account() {
 test_self_transfer() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
@@ -136,16 +134,18 @@ test_self_transfer() {
 test_oversized_transfer_description() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    local long_desc=$(printf 'a%.0s' {1..10000})
-    
-    BASE_URL="$BANKING_URL"
-    request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
-    [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local long_desc
+    long_desc=$(printf 'a%.0s' {1..10000})
     
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local target=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    
+    request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
+    [[ "$HTTP_STATUS" == "200" ]] || return 1
+    local target
+    target=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     
@@ -160,10 +160,10 @@ test_oversized_transfer_description() {
 test_very_large_amount() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # Try to deposit maximum BigDecimal value
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" \
@@ -177,10 +177,10 @@ test_very_large_amount() {
 test_floating_point_precision() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # Deposit three times 0.1
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 0.1}'
@@ -196,7 +196,8 @@ test_floating_point_precision() {
     request GET "/api/v1/accounts/$account" "$EDGE_TEST_TOKEN"
     [[ "$HTTP_STATUS" == "200" ]] || return 1
     
-    local balance=$(jq -er '.balance' <<<"$HTTP_BODY")
+    local balance
+    balance=$(jq -er '.balance' <<<"$HTTP_BODY")
     [[ "$balance" == "0.3" || "$balance" == "0.30" ]] || return 1
 }
 
@@ -204,10 +205,10 @@ test_floating_point_precision() {
 test_deposit_missing_amount() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{}'
     
@@ -218,10 +219,10 @@ test_deposit_missing_amount() {
 test_deposit_null_amount() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": null}'
     
@@ -232,10 +233,10 @@ test_deposit_null_amount() {
 test_deposit_non_numeric_amount() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": "not a number"}'
     
@@ -246,14 +247,15 @@ test_deposit_non_numeric_amount() {
 test_sql_injection_in_description() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local target=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local target
+    target=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     
@@ -271,10 +273,10 @@ test_sql_injection_in_description() {
 test_transfer_non_numeric_account() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     
@@ -288,10 +290,10 @@ test_transfer_non_numeric_account() {
 test_transfer_malformed_account() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v1/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v1/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 100.00}'
     
@@ -306,10 +308,10 @@ test_transfer_malformed_account() {
 test_idempotency_key_different_payload() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v2/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     # First request
     request POST "/api/v2/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 50.00}' \
@@ -328,12 +330,13 @@ test_idempotency_key_different_payload() {
 test_oversized_idempotency_key() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    local long_key=$(printf 'k%.0s' {1..10000})
+    local long_key
+    long_key=$(printf 'k%.0s' {1..10000})
     
-    BASE_URL="$BANKING_URL"
     request POST /api/v2/accounts "$EDGE_TEST_TOKEN" '{}'
     [[ "$HTTP_STATUS" == "200" ]] || return 1
-    local account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
+    local account
+    account=$(jq -er '.accountNumber' <<<"$HTTP_BODY")
     
     request POST "/api/v2/accounts/$account/deposits" "$EDGE_TEST_TOKEN" '{"amount": 50.00}' \
         "Idempotency-Key: $long_key"
@@ -346,7 +349,6 @@ test_oversized_idempotency_key() {
 test_access_nonexistent_account() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     request GET /api/v1/accounts/999999999999 "$EDGE_TEST_TOKEN"
     
     [[ "$HTTP_STATUS" == "404" ]] || return 1
@@ -356,7 +358,6 @@ test_access_nonexistent_account() {
 test_malformed_json_request() {
     [[ -n "$EDGE_TEST_TOKEN" ]] || skip_test "Requires setup"
     
-    BASE_URL="$BANKING_URL"
     
     local curl_args=(
         -sS
