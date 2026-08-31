@@ -323,6 +323,33 @@ test_notification_service_multi_user_events() {
     [[ "$count" -gt 0 ]] || return 1
 }
 
+# Test: Reporting service receives Kafka events for processed transactions
+test_reporting_service_receives_kafka_events() {
+    [[ -n "$INT_USER1_ACCOUNT" && -n "$INT_USER1_TOKEN" ]] || skip_test "Requires setup"
+    
+    BASE_URL="$BANKING_URL"
+    local before_count
+    before_count="$(db_query reporting-db "SELECT COUNT(*) FROM reporting_logs")"
+    
+    request POST "/api/v1/accounts/$INT_USER1_ACCOUNT/deposits" "$INT_USER1_TOKEN" '{"amount": 77.77}'
+    [[ "$HTTP_STATUS" == "200" ]] || return 1
+    
+    local attempts=0
+    while (( attempts < 30 )); do
+        local after_count daily_volume_count
+        after_count="$(db_query reporting-db "SELECT COUNT(*) FROM reporting_logs")"
+        daily_volume_count="$(db_query reporting-db "SELECT COUNT(*) FROM daily_volumes WHERE event_type = 'DEPOSIT' AND total_volume >= 77.77")"
+        
+        if (( after_count > before_count )) && (( daily_volume_count > 0 )); then
+            return 0
+        fi
+        sleep 2
+        ((attempts++))
+    done
+    
+    return 1
+}
+
 # Register all integration tests
 integration_register_tests() {
     register_test "integration" "user_cannot_view_other_accounts" "test_user_cannot_view_other_accounts"
@@ -337,6 +364,7 @@ integration_register_tests() {
     register_test "integration" "concurrent_withdrawals_insufficient_funds" "test_concurrent_withdrawals_insufficient_funds"
     register_test "integration" "idempotency_key_per_user" "test_idempotency_key_per_user"
     register_test "integration" "notification_service_multi_user_events" "test_notification_service_multi_user_events"
+    register_test "integration" "reporting_service_receives_kafka_events" "test_reporting_service_receives_kafka_events"
 }
 
 # Export functions
@@ -347,3 +375,4 @@ export -f test_user_cannot_transfer_from_other_account test_user_cannot_view_oth
 export -f test_valid_transfer_between_users test_kafka_events_contain_correct_user_id
 export -f test_concurrent_deposits_consistency test_concurrent_withdrawals_insufficient_funds
 export -f test_idempotency_key_per_user test_notification_service_multi_user_events
+export -f test_reporting_service_receives_kafka_events

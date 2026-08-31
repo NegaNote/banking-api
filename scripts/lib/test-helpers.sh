@@ -104,6 +104,9 @@ db_query() {
         notification-db)
             database="notificationdb"
             ;;
+        reporting-db)
+            database="reportingdb"
+            ;;
         *)
             printf '[ERROR] Unknown database service: %s\n' "$service" >&2
             return 1
@@ -311,7 +314,7 @@ wait_for_stack_ready() {
         local all_healthy=1
         local service row state health
         
-        for service in auth-db banking-db notification-db auth-service banking-service kafka; do
+        for service in auth-db banking-db notification-db reporting-db auth-service banking-service kafka; do
             row="$(service_status_line "$service")"
             if [[ -z "$row" ]]; then
                 all_healthy=0

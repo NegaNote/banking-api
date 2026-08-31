@@ -44,6 +44,21 @@ services:
       timeout: 5s
       retries: 10
 
+  reporting-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS}
+      MYSQL_DATABASE: reportingdb
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - reporting-db-data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   auth-service:
     build: ./auth-service
     ports:
@@ -121,6 +136,24 @@ services:
       kafka:
         condition: service_healthy
 
+  reporting-service:
+    build: ./reporting-service
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://reporting-db:3306/reportingdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=True
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_PROFILES_ACTIVE: docker
+      APP_AUTH_JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+    depends_on:
+      reporting-db:
+        condition: service_healthy
+      banking-service:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
   adminer:
     image: adminer:latest
     ports:
@@ -180,3 +213,4 @@ volumes:
   auth-db-data:
   banking-db-data:
   notification-db-data:
+  reporting-db-data:
